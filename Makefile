@@ -18,7 +18,7 @@ sub-push-%:
 all-build: $(addprefix sub-build-,$(ALL_ARCH))
 
 sub-build-%:
-	docker build --build-arg ARCH=$* -t ${IMAGE_REPO}/${IMAGE_NAME}:$*-${VERSION} .
+	docker build --platform linux/$* -t ${IMAGE_REPO}/${IMAGE_NAME}:$*-${VERSION} .
 
 export DOCKER_CLI_EXPERIMENTAL = enabled
 push-manifest:
