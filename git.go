@@ -132,32 +132,31 @@ func handleGetBuild(w http.ResponseWriter, req *http.Request) error {
 		return fmt.Errorf("project or commit param is missing")
 	}
 
-	if commit != "" {
-		content, err := sess.Download(myBucket, fmt.Sprintf("%s/%s/build.yaml", project, commit))
-		if err != nil {
-			return fmt.Errorf("failed to get %s/%s/build.yaml from the bucket", project, commit)
-		}
-		var build Build
-		err = json.Unmarshal(content, &build)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal the build.yaml content to Build structure")
-		}
-		content, err = sess.Download(myBucket, fmt.Sprintf("%s/%s/%s", project, commit, build.Artifacts[0]))
-		if err != nil {
-			return fmt.Errorf("failed to get %s/%s/%s from the bucket", project, commit, build.Artifacts[0])
-		}
-
-		contentType := http.DetectContentType(content)
-
-		size := strconv.FormatInt(int64(len(content)), 10)
-
-		//Send the headers
-		w.Header().Set("Content-Disposition", "attachment; filename="+build.Artifacts[0])
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Content-Length", size)
-
-		io.Copy(w, bytes.NewReader(content))
+	content, err := sess.Download(myBucket, fmt.Sprintf("%s/%s/build.yaml", project, commit))
+	if err != nil {
+		return fmt.Errorf("failed to get %s/%s/build.yaml from the bucket", project, commit)
 	}
+	var build Build
+	err = json.Unmarshal(content, &build)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal the build.yaml content to Build structure")
+	}
+	rc, info, err := sess.Get(myBucket, fmt.Sprintf("%s/%s/%s", project, commit, build.Artifacts[0]))
+	if err != nil {
+		return fmt.Errorf("failed to get %s/%s/%s from the bucket: %w", project, commit, build.Artifacts[0], err)
+	}
+	defer rc.Close()
+
+	//Send the headers
+	w.Header().Set("Content-Disposition", "attachment; filename="+build.Artifacts[0])
+	if info.ContentType != "" {
+		w.Header().Set("Content-Type", info.ContentType)
+	}
+	if info.ContentLength > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(info.ContentLength, 10))
+	}
+
+	io.Copy(w, rc)
 	return nil
 }
 

@@ -2,11 +2,14 @@ package s3
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
-	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
@@ -15,10 +18,14 @@ import (
 
 var _ storage.Storage = &S3{}
 
-type S3 struct{
-	credentials *Credentials
-	sess *session.Session
-	uploader *s3manager.Uploader
+const (
+	defaultPartSize    = 16 * 1024 * 1024 // 16 MB
+	defaultConcurrency = 5
+)
+
+type S3 struct {
+	sess       *session.Session
+	uploader   *s3manager.Uploader
 	downloader *s3manager.Downloader
 }
 
@@ -31,67 +38,104 @@ type Credentials struct {
 	SecretKey        string `json:"secret_key"`
 }
 
-func NewSession(s3Credentials *Credentials) (*S3, error){
-	var staticCredentials credentials.StaticProvider
-	if s3Credentials.AccessKey != "" && s3Credentials.SecretKey != "" {
-		staticCredentials = credentials.StaticProvider{
-			Value: credentials.Value{
-				AccessKeyID:     s3Credentials.AccessKey,
-				SecretAccessKey: s3Credentials.SecretKey,
-			},
-		}
+func newHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+
+	return &http.Client{
+		Transport: transport,
 	}
-	credentialChain := credentials.NewChainCredentials(
-		[]credentials.Provider{
-			&staticCredentials,
-			&credentials.EnvProvider{},
-			&ec2rolecreds.EC2RoleProvider{
-				Client: ec2metadata.New(session.New()),
-			},
-		})
-	sess, err := session.NewSession(&aws.Config{
-		Credentials:      credentialChain,
-		Endpoint:         aws.String(s3Credentials.Endpoint),
-		DisableSSL:       aws.Bool(s3Credentials.Insecure),
-		S3ForcePathStyle: aws.Bool(s3Credentials.S3ForcePathStyle),
-		Region:           aws.String(s3Credentials.Region),
-	})
-	if err != nil {
-		fmt.Printf("error creating S3 Session: %v", err)
+}
+
+func NewSession(cfg *Credentials) (*S3, error) {
+	if cfg == nil {
+		return nil, errors.New("s3: configuration credentials cannot be nil")
 	}
 
-	return &S3 {
-		s3Credentials,
-		sess,
-		s3manager.NewUploader(sess),
-		s3manager.NewDownloader(sess),
-	},  nil
+	awsCfg := &aws.Config{
+		DisableSSL:       aws.Bool(cfg.Insecure),
+		S3ForcePathStyle: aws.Bool(cfg.S3ForcePathStyle),
+		HTTPClient:       newHTTPClient(),
+	}
+
+	if cfg.Region != "" {
+		awsCfg.Region = aws.String(cfg.Region)
+	}
+
+	if cfg.Endpoint != "" {
+		awsCfg.Endpoint = aws.String(cfg.Endpoint)
+	}
+
+	if cfg.AccessKey != "" && cfg.SecretKey != "" {
+		awsCfg.Credentials = credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, "")
+	}
+
+	sess, err := session.NewSession(awsCfg)
+	if err != nil {
+		return nil, fmt.Errorf("s3: failed to create session: %w", err)
+	}
+
+	uploader := s3manager.NewUploader(sess, func(u *s3manager.Uploader) {
+		u.PartSize = defaultPartSize
+		u.Concurrency = defaultConcurrency
+	})
+
+	downloader := s3manager.NewDownloader(sess, func(d *s3manager.Downloader) {
+		d.PartSize = defaultPartSize
+		d.Concurrency = defaultConcurrency
+	})
+
+	return &S3{
+		sess:       sess,
+		uploader:   uploader,
+		downloader: downloader,
+	}, nil
 }
 
 func (s *S3) Download(bucket, object string) ([]byte, error) {
 	wb := aws.WriteAtBuffer{}
-
-	// Write the contents of S3 Object to the WriteAtBuffer
 	n, err := s.downloader.Download(&wb, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(object),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to download file, %v", err)
+		return nil, fmt.Errorf("failed to download %s/%s: %w", bucket, object, err)
 	}
 	fmt.Printf("file downloaded, %d bytes\n", n)
 	return wb.Bytes(), nil
 }
 
-func (s *S3) Upload(bucket string, object string, content []byte) error {
+func (s *S3) Upload(bucket, object string, content []byte) error {
 	result, err := s.uploader.Upload(&s3manager.UploadInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(object),
 		Body:   bytes.NewReader(content),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to upload file, %v", err)
+		return fmt.Errorf("failed to upload %s/%s: %w", bucket, object, err)
 	}
-	fmt.Printf("file uploaded to, %s\n", aws.StringValue(&result.Location))
+	fmt.Printf("file uploaded to, %s\n", result.Location)
 	return nil
+}
+
+func (s *S3) Get(bucket, object string) (io.ReadCloser, *storage.ObjectInfo, error) {
+	out, err := s3.New(s.sess).GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get object %s/%s: %w", bucket, object, err)
+	}
+
+	info := &storage.ObjectInfo{}
+	if out.ContentLength != nil {
+		info.ContentLength = *out.ContentLength
+	}
+	if out.ContentType != nil {
+		info.ContentType = *out.ContentType
+	}
+
+	return out.Body, info, nil
 }
