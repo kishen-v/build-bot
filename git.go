@@ -126,8 +126,12 @@ func createPR(prSubject, prDescription, prBranch, commitBranch *string) (err err
 
 func setArtifactHeaders(w http.ResponseWriter, name, contentType string, length int64) {
 	w.Header().Set("Content-Disposition", "attachment; filename="+name)
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if length > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+	}
 }
 
 func handleGetBuild(w http.ResponseWriter, req *http.Request) error {
@@ -139,40 +143,43 @@ func handleGetBuild(w http.ResponseWriter, req *http.Request) error {
 		return fmt.Errorf("project or commit param is missing")
 	}
 
-	if commit != "" {
-		content, err := sess.Download(myBucket, fmt.Sprintf("%s/%s/build.yaml", project, commit))
+	content, err := sess.Download(myBucket, fmt.Sprintf("%s/%s/build.yaml", project, commit))
+	if err != nil {
+		return fmt.Errorf("failed to get %s/%s/build.yaml from the bucket", project, commit)
+	}
+	var build Build
+	err = json.Unmarshal(content, &build)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal the build.yaml content to Build structure")
+	}
+	if len(build.Artifacts) == 0 {
+		return fmt.Errorf("no artifacts listed in %s/%s/build.yaml", project, commit)
+	}
+	artifact := build.Artifacts[0]
+	artifactPath := fmt.Sprintf("%s/%s/%s", project, commit, artifact)
+
+	// HEAD only needs the object metadata, so don't fetch the body.
+	if req.Method == http.MethodHead {
+		info, err := sess.Head(myBucket, artifactPath)
 		if err != nil {
-			return fmt.Errorf("failed to get %s/%s/build.yaml from the bucket", project, commit)
+			return fmt.Errorf("failed to head %s from the bucket: %w", artifactPath, err)
 		}
-		var build Build
-		err = json.Unmarshal(content, &build)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal the build.yaml content to Build structure")
-		}
+		setArtifactHeaders(w, artifact, info.ContentType, info.ContentLength)
+		return nil
+	}
 
-		if len(build.Artifacts) == 0 {
-			return fmt.Errorf("no artifacts found in %s/%s/build.yaml", project, commit)
-		}
-		artifact := build.Artifacts[0]
-		artifactPath := fmt.Sprintf("%s/%s/%s", project, commit, artifact)
+	rc, info, err := sess.Get(myBucket, artifactPath)
+	if err != nil {
+		return fmt.Errorf("failed to get %s from the bucket: %w", artifactPath, err)
+	}
+	defer rc.Close()
 
-		if req.Method == http.MethodHead {
-			info, err := sess.Head(myBucket, artifactPath)
-			if err != nil {
-				return fmt.Errorf("failed to get %s from the bucket", artifactPath)
-			}
+	setArtifactHeaders(w, artifact, info.ContentType, info.ContentLength)
 
-			setArtifactHeaders(w, artifact, info.ContentType, info.ContentLength)
-			return nil
-		}
-
-		content, err = sess.Download(myBucket, artifactPath)
-		if err != nil {
-			return fmt.Errorf("failed to get %s from the bucket", artifactPath)
-		}
-
-		setArtifactHeaders(w, artifact, http.DetectContentType(content), int64(len(content)))
-		io.Copy(w, bytes.NewReader(content))
+	// Headers are already sent at this point, so a mid-stream failure can only
+	// be logged; the client will see a truncated body.
+	if _, err := io.Copy(w, rc); err != nil {
+		klog.Errorf("failed to stream %s to the client: %v", artifactPath, err)
 	}
 	return nil
 }
