@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"net/http"
 	"os"
 	"strconv"
