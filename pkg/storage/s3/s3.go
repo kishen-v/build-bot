@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -40,6 +41,24 @@ type Credentials struct {
 	SecretKey        string `json:"secret_key"`
 }
 
+// Validate performs structural checks on the configuration. It does not
+// verify that the credentials are accepted by the S3 endpoint.
+func (c *Credentials) Validate() error {
+	if c.AccessKey == "" || c.SecretKey == "" {
+		return errors.New("s3: access_key and secret_key are both required in the credentials file")
+	}
+	if c.Region == "" {
+		return errors.New("s3: region is required")
+	}
+	if c.Endpoint == "" {
+		return errors.New("s3: endpoint is required")
+	}
+	if u, err := url.Parse(c.Endpoint); err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("s3: invalid endpoint %q, expected a URL like https://s3.us-south.cloud-object-storage.appdomain.cloud", c.Endpoint)
+	}
+	return nil
+}
+
 func newHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 100
@@ -55,23 +74,18 @@ func NewSession(cfg *Credentials) (*S3, error) {
 	if cfg == nil {
 		return nil, errors.New("s3: configuration credentials cannot be nil")
 	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 
+	// Validate() guarantees region, endpoint, access_key and secret_key are set.
 	awsCfg := &aws.Config{
+		Credentials:      credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, ""),
 		DisableSSL:       aws.Bool(cfg.Insecure),
-		S3ForcePathStyle: aws.Bool(cfg.S3ForcePathStyle),
+		Endpoint:         aws.String(cfg.Endpoint),
 		HTTPClient:       newHTTPClient(),
-	}
-
-	if cfg.Region != "" {
-		awsCfg.Region = aws.String(cfg.Region)
-	}
-
-	if cfg.Endpoint != "" {
-		awsCfg.Endpoint = aws.String(cfg.Endpoint)
-	}
-
-	if cfg.AccessKey != "" && cfg.SecretKey != "" {
-		awsCfg.Credentials = credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, "")
+		Region:           aws.String(cfg.Region),
+		S3ForcePathStyle: aws.Bool(cfg.S3ForcePathStyle),
 	}
 
 	sess, err := session.NewSession(awsCfg)
