@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"strconv"
@@ -69,7 +68,7 @@ func getFileContent(fileArg string) (targetName string, b []byte, err error) {
 		targetName = files[1]
 	}
 
-	b, err = ioutil.ReadFile(localFile)
+	b, err = os.ReadFile(localFile)
 	return targetName, b, err
 }
 
@@ -240,7 +239,7 @@ func handlePostBuild(req *http.Request) error {
 		klog.Infof("Build: %v", b)
 		return nil
 	}
-	tmpfs, err := ioutil.TempFile("", "build")
+	tmpfs, err := os.CreateTemp("", "build")
 	if err != nil {
 		return fmt.Errorf("failed to create a tempfile: %v", err)
 	}
@@ -302,7 +301,7 @@ func gitInit() error {
 		if tokenPath == "" {
 			return fmt.Errorf("github token is missing, either --github-token-path or GITHUB_AUTH_TOKEN env is missing")
 		}
-		secret, err := ioutil.ReadFile(tokenPath)
+		secret, err := os.ReadFile(tokenPath)
 		if err != nil {
 			return err
 		}

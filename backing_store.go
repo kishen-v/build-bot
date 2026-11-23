@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ppc64le-cloud/build-bot/pkg/storage/s3"
-	"io/ioutil"
+	"os"
 )
 
 const (
@@ -19,7 +19,7 @@ func backingStoreInit() error {
 	if s3CredentialsFile == "" {
 		return fmt.Errorf("--s3-credentials-file is missing")
 	}
-	s3Credentials, err := ioutil.ReadFile(s3CredentialsFile)
+	s3Credentials, err := os.ReadFile(s3CredentialsFile)
 	if err != nil {
 		return err
 	}
