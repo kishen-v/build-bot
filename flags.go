@@ -11,7 +11,7 @@ var (
 	authorName        = "Powercloud Bot"
 	authorEmail       = "ltccci@in.ibm.com"
 	s3CredentialsFile string
-	tokenPath string
+	tokenPath         string
 )
 
 func init() {

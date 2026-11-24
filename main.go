@@ -12,17 +12,20 @@ import (
 )
 
 type Build struct {
-	Source    string `json:"source"`
-	Commit    string `json:"commit"`
+	Source    string   `json:"source"`
+	Commit    string   `json:"commit"`
 	Artifacts []string `json:"artifacts"`
-	Project   string `json:"project"`
+	Project   string   `json:"project"`
 }
 
-//How to test:
+// How to test:
 // Post:
-//    curl -v -X POST http://127.0.0.1:8090/build -H 'Content-Type: multipart/form-data' -F file=go1.15.1.linux-ppc64le.tar.gz -F source=github.com/golang/go.git -F commit=1234 -F project=golang/master
+//
+//	curl -v -X POST http://127.0.0.1:8090/build -H 'Content-Type: multipart/form-data' -F file=go1.15.1.linux-ppc64le.tar.gz -F source=github.com/golang/go.git -F commit=1234 -F project=golang/master
+//
 // Get:
-//    curl -v -X GET http://127.0.0.1:8090/build\?project\=golang/master\&commit\=1234 -o "file1.tar.gz"
+//
+//	curl -v -X GET http://127.0.0.1:8090/build\?project\=golang/master\&commit\=1234 -o "file1.tar.gz"
 func build(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case http.MethodPost:
